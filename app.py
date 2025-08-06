@@ -1719,7 +1719,7 @@ def send_payslip_email(employee_email, employee_name, payslip_pdf, month,
         # SMTP configuration
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
-        server.login("stud.studentsmart@gmail.com", "jygr uhcl odmk flve")
+        server.login("toolpayroll@gmail.com", "jfoe wvdz vbue nsfw
         server.send_message(msg)
         server.quit()
 
