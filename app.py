@@ -83,18 +83,18 @@ def init_default_users():
         if user_count == 0:
             # Create default users
             admin_user = User(username='admin', email='admin@payrollpro.com', role='admin')
-            admin_user.set_password('admin')
+            admin_user.set_password('admin123')
             
             hr_user = User(username='hr', email='hr@payrollpro.com', role='hr')
-            hr_user.set_password('hr')
+            hr_user.set_password('hr123')
             
             accounts_user = User(username='accounts', email='accounts@payrollpro.com', role='accounts')
-            accounts_user.set_password('accounts')
+            accounts_user.set_password('accounts123')
             
             db.session.add_all([admin_user, hr_user, accounts_user])
             db.session.commit()
             app.logger.info("Default users created: admin/admin, hr/hr, accounts/accounts")
-            print("Default users created: admin/admin, hr/hr, accounts/accounts")
+            print("Default users created: admin/admin123, hr/hr123, accounts/accounts123")
         else:
             # Check if existing users can authenticate properly
             admin_user = db.session.query(User).filter_by(username='admin').first()
@@ -1863,14 +1863,7 @@ def login():
             </button>
         </form>
         
-        <div class="user-info">
-            <h6><i class="fas fa-info-circle"></i> Default Login Credentials:</h6>
-            <div class="row">
-                <div class="col-4"><strong>Admin:</strong><br>admin/admin</div>
-                <div class="col-4"><strong>HR:</strong><br>hr/hr</div>
-                <div class="col-4"><strong>Accounts:</strong><br>accounts/accounts</div>
-            </div>
-        </div>
+        
     </div>
     
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
