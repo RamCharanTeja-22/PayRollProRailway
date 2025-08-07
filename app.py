@@ -2051,28 +2051,61 @@ def dashboard():
 def employee_dashboard(emp_id):
     """Employee-specific dashboard showing leave balance and usage"""
     from datetime import datetime
-    from dateutil import relativedelta
+    try:
+        # Check if dateutil is available, if not use basic datetime
+        try:
+            from dateutil import relativedelta
+        except ImportError:
+            # Fallback implementation without dateutil
+            import calendar
+            def get_previous_month(current_date, months_back):
+                year = current_date.year
+                month = current_date.month - months_back
+                while month <= 0:
+                    month += 12
+                    year -= 1
+                return datetime(year, month, 1)
+    except ImportError:
+        pass
+    
     from models import Employee, Payroll
     
     try:
         employee = db.session.query(Employee).filter_by(emp_id=emp_id).first()
         if not employee:
-            return f"<div class='alert alert-danger'>Employee not found</div>"
+            return render_template_string("""
+                <!DOCTYPE html>
+                <html>
+                <head><title>Employee Not Found</title></head>
+                <body>
+                    <div class='alert alert-danger'>Employee not found</div>
+                    <a href="/">Back to Dashboard</a>
+                </body>
+                </html>
+            """)
         
         # Get current month and year
         current_date = datetime.now()
         current_month = current_date.strftime('%B')
         current_year = current_date.year
         
-        # Calculate leave balance for current month
-        leave_info = calculate_leave_balance(employee, 0, current_month, current_year)
+        # Simple leave balance calculation - don't modify employee record
+        current_balance = employee.leave_balance + 1.5  # Add current month allocation
         
         # Get leave usage history for last 6 months
         leave_history = []
         for i in range(6):
-            month_date = current_date - relativedelta.relativedelta(months=i)
-            month_name = month_date.strftime('%B')
-            year = month_date.year
+            try:
+                if 'relativedelta' in locals():
+                    month_date = current_date - relativedelta.relativedelta(months=i)
+                else:
+                    month_date = get_previous_month(current_date, i)
+                month_name = month_date.strftime('%B')
+                year = month_date.year
+            except:
+                # Fallback: just use current month if calculation fails
+                month_name = current_month
+                year = current_year
             
             # Get payroll record for this month if exists
             payroll = db.session.query(Payroll).filter_by(
@@ -2086,8 +2119,8 @@ def employee_dashboard(emp_id):
                     'month': month_name,
                     'year': year,
                     'leaves_taken': payroll.leaves_taken,
-                    'leave_balance_used': payroll.leave_balance_used,
-                    'loss_of_pay_days': payroll.loss_of_pay_days
+                    'leave_balance_used': payroll.leave_balance_used if hasattr(payroll, 'leave_balance_used') else 0,
+                    'loss_of_pay_days': payroll.loss_of_pay_days if hasattr(payroll, 'loss_of_pay_days') else 0
                 })
             else:
                 leave_history.append({
@@ -2098,66 +2131,101 @@ def employee_dashboard(emp_id):
                     'loss_of_pay_days': 0
                 })
         
-        # Create employee dashboard HTML
-        dashboard_content = f'''
-        <div class="container-fluid">
-            <div class="row mb-4">
-                <div class="col">
-                    <h2 class="page-title">
-                        <i class="fas fa-user-circle"></i> {employee.name} - Leave Dashboard
-                    </h2>
-                    <nav aria-label="breadcrumb">
-                        <ol class="breadcrumb">
-                            <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
-                            <li class="breadcrumb-item active">Employee Leave Dashboard</li>
-                        </ol>
-                    </nav>
-                </div>
-            </div>
-
+        # Create a complete HTML page for employee dashboard
+        employee_dashboard_html = f'''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{employee.name} - Leave Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+        }}
+        .dashboard-container {{
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }}
+        .header {{
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }}
+        .card {{
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,0.075);
+            margin-bottom: 20px;
+        }}
+        .stat-card {{
+            text-align: center;
+            padding: 25px;
+            transition: transform 0.3s ease;
+        }}
+        .stat-card:hover {{
+            transform: translateY(-5px);
+        }}
+        .table-responsive {{
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <div class="header">
+            <h1><i class="fas fa-user-circle"></i> {employee.name} - Leave Dashboard</h1>
+            <p>Employee ID: {employee.emp_id}</p>
+            <a href="/" class="btn btn-light mt-2">
+                <i class="fas fa-arrow-left"></i> Back to Dashboard
+            </a>
+        </div>
+        
+        <div class="container-fluid p-4">
             <!-- Current Leave Status -->
             <div class="row mb-4">
                 <div class="col-md-3">
-                    <div class="card">
-                        <div class="card-body text-center">
-                            <div class="stat-icon text-primary mb-2">
-                                <i class="fas fa-calendar-check fa-2x"></i>
-                            </div>
-                            <h5 class="card-title">Available Leave Balance</h5>
-                            <h3 class="text-primary">{leave_info['remaining_balance']:.1f} days</h3>
+                    <div class="card stat-card">
+                        <div class="card-body">
+                            <i class="fas fa-calendar-check fa-2x text-primary mb-2"></i>
+                            <h5>Available Leave Balance</h5>
+                            <h3 class="text-primary">{current_balance:.1f} days</h3>
                         </div>
                     </div>
                 </div>
                 <div class="col-md-3">
-                    <div class="card">
-                        <div class="card-body text-center">
-                            <div class="stat-icon text-success mb-2">
-                                <i class="fas fa-plus-circle fa-2x"></i>
-                            </div>
-                            <h5 class="card-title">Monthly Allocation</h5>
+                    <div class="card stat-card">
+                        <div class="card-body">
+                            <i class="fas fa-plus-circle fa-2x text-success mb-2"></i>
+                            <h5>Monthly Allocation</h5>
                             <h3 class="text-success">1.5 days</h3>
                         </div>
                     </div>
                 </div>
                 <div class="col-md-3">
-                    <div class="card">
-                        <div class="card-body text-center">
-                            <div class="stat-icon text-info mb-2">
-                                <i class="fas fa-calendar-alt fa-2x"></i>
-                            </div>
-                            <h5 class="card-title">Current Month</h5>
+                    <div class="card stat-card">
+                        <div class="card-body">
+                            <i class="fas fa-calendar-alt fa-2x text-info mb-2"></i>
+                            <h5>Current Month</h5>
                             <h3 class="text-info">{current_month} {current_year}</h3>
                         </div>
                     </div>
                 </div>
                 <div class="col-md-3">
-                    <div class="card">
-                        <div class="card-body text-center">
-                            <div class="stat-icon text-warning mb-2">
-                                <i class="fas fa-info-circle fa-2x"></i>
-                            </div>
-                            <h5 class="card-title">Employee ID</h5>
-                            <h3 class="text-warning">{employee.emp_id}</h3>
+                    <div class="card stat-card">
+                        <div class="card-body">
+                            <i class="fas fa-building fa-2x text-warning mb-2"></i>
+                            <h5>Department</h5>
+                            <h3 class="text-warning">{employee.department or 'N/A'}</h3>
                         </div>
                     </div>
                 </div>
@@ -2167,7 +2235,7 @@ def employee_dashboard(emp_id):
             <div class="row">
                 <div class="col-12">
                     <div class="card">
-                        <div class="card-header">
+                        <div class="card-header bg-primary text-white">
                             <h5 class="mb-0">
                                 <i class="fas fa-history"></i> Leave Usage History (Last 6 Months)
                             </h5>
@@ -2175,7 +2243,7 @@ def employee_dashboard(emp_id):
                         <div class="card-body">
                             <div class="table-responsive">
                                 <table class="table table-striped">
-                                    <thead>
+                                    <thead class="table-dark">
                                         <tr>
                                             <th>Month</th>
                                             <th>Year</th>
@@ -2192,7 +2260,7 @@ def employee_dashboard(emp_id):
             status_badge = "success" if history['loss_of_pay_days'] == 0 else "warning"
             status_text = "Paid Leave" if history['loss_of_pay_days'] == 0 else "Loss of Pay Applied"
             
-            dashboard_content += f'''
+            employee_dashboard_html += f'''
                                         <tr>
                                             <td>{history['month']}</td>
                                             <td>{history['year']}</td>
@@ -2203,7 +2271,7 @@ def employee_dashboard(emp_id):
                                         </tr>
             '''
         
-        dashboard_content += '''
+        employee_dashboard_html += '''
                                     </tbody>
                                 </table>
                             </div>
@@ -2241,20 +2309,27 @@ def employee_dashboard(emp_id):
                 </div>
             </div>
         </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
         '''
         
-        return render_template_string(HTML_TEMPLATE,
-                                    total_employees=0,
-                                    recent_payroll=[],
-                                    employees=[],
-                                    all_payroll=[],
-                                    monthly_stats=[],
-                                    title=f"{employee.name} - Leave Dashboard",
-                                    content=dashboard_content)
+        return employee_dashboard_html
                              
     except Exception as e:
         app.logger.error(f"Employee dashboard error: {str(e)}")
-        return f"<div class='alert alert-danger'>Error loading employee dashboard: {str(e)}</div>"
+        return f'''
+        <!DOCTYPE html>
+        <html>
+        <head><title>Error</title></head>
+        <body>
+            <div class='alert alert-danger'>Error loading employee dashboard: {str(e)}</div>
+            <a href="/">Back to Dashboard</a>
+        </body>
+        </html>
+        '''
 
 
 @app.route('/add_employee', methods=['POST'])
