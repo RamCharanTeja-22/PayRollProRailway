@@ -1691,7 +1691,7 @@ def send_payslip_email(employee_email, employee_name, payslip_pdf, month,
     """Send payslip via email"""
     try:
         msg = MIMEMultipart()
-        msg['From'] = "stud.studentsmart@gmail.com"
+        msg['From'] = "toolpayroll@gmail.com"
         msg['To'] = employee_email
         msg['Subject'] = f"Payslip for {month} {year}"
 
@@ -1719,7 +1719,7 @@ def send_payslip_email(employee_email, employee_name, payslip_pdf, month,
         # SMTP configuration
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
-        server.login("toolpayroll@gmail.com", "jfoe wvdz vbue nsfw")
+        server.login("toolpayroll@gmail.com", "ttyl qmqx uehm xdke")
         server.send_message(msg)
         server.quit()
 
@@ -2727,32 +2727,63 @@ def bulk_process_payroll():
         return redirect(url_for('dashboard'))
 
     try:
+        # Check file extension
+        filename = file.filename.lower()
+        if not (filename.endswith('.xlsx') or filename.endswith('.xls')):
+            flash('Please upload an Excel file (.xlsx or .xls format only)!', 'error')
+            return redirect(url_for('dashboard'))
+            
         df = pd.read_excel(file)
         success_count = 0
         error_count = 0
+        error_details = []
 
-        for _, row in df.iterrows():
+        # Validate required columns
+        required_columns = ['emp_id', 'name', 'leaves_taken', 'pf_opted']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            flash(f'Missing required columns in Excel file: {", ".join(missing_columns)}', 'error')
+            return redirect(url_for('dashboard'))
+
+        for row_num, row in df.iterrows():
             try:
-                emp_id = str(row['emp_id'])
-                days_worked = int(float(row.get('days_worked', 30)))
+                emp_id = str(row['emp_id']).strip() if pd.notna(row['emp_id']) else ''
+                leaves_taken = float(row.get('leaves_taken', 0))
                 pf_opted = str(row.get('pf_opted', 'Yes')).lower() in ['yes', '1', 'true']
+
+                if not emp_id:
+                    error_details.append(f"Row {row_num + 2}: Employee ID is missing")
+                    error_count += 1
+                    continue
 
                 # Get employee data
                 employee = db.session.query(Employee).filter_by(emp_id=emp_id).first()
                 if not employee:
+                    error_details.append(f"Row {row_num + 2}: Employee ID '{emp_id}' not found")
                     error_count += 1
                     continue
 
                 # Calculate salary components
                 salary_components = calculate_salary_components(employee.ctc_monthly, pf_opted)
-
-                # Adjust for days worked
-                if days_worked != 30:
-                    ratio = days_worked / 30.0
-                    for key in salary_components:
-                        if key != 'employer_pf':  # Employer PF remains constant
-                            salary_components[key] = round(
-                                salary_components[key] * ratio, 2)
+                
+                # Calculate leave balance and attendance
+                leave_info = calculate_leave_balance(employee, leaves_taken, month, year)
+                
+                # Adjust salary for loss of pay days
+                if leave_info['loss_of_pay_days'] > 0:
+                    loss_ratio = leave_info['loss_of_pay_days'] / 30.0
+                    for key in ['basic', 'hra', 'special_allowance', 'conveyance_allowance', 'medical_allowance']:
+                        salary_components[key] = round(salary_components[key] * (1 - loss_ratio), 2)
+                
+                # Recalculate totals with adjustments
+                salary_components['gross_salary'] = round(
+                    salary_components['basic'] + salary_components['hra'] + salary_components['special_allowance'] +
+                    salary_components['conveyance_allowance'] + salary_components['medical_allowance'] + 
+                    salary_components['overtime_amount'] + salary_components['expenses'] + salary_components['bonus'] +
+                    salary_components['leave_balance_amount'], 2)
+                
+                salary_components['net_salary'] = round(
+                    salary_components['gross_salary'] - salary_components['total_deductions'], 2)
 
                 # Check if payroll already exists
                 existing = db.session.query(Payroll).filter_by(
@@ -2760,76 +2791,105 @@ def bulk_process_payroll():
                 ).first()
 
                 if existing:
-                    # Update existing payroll with new schema
-                    existing.total_days = days_worked
-                    existing.present_days = days_worked
-                    existing.leaves_taken = 0
-                    existing.paid_days = days_worked
-                    existing.loss_of_pay_days = 30 - days_worked if days_worked < 30 else 0
-                    existing.leave_balance_used = 0
+                    # Update existing payroll
+                    existing.total_days = 30
+                    existing.present_days = int(leave_info['present_days'])
+                    existing.leaves_taken = leaves_taken
+                    existing.paid_days = int(leave_info['paid_days'])
+                    existing.loss_of_pay_days = leave_info['loss_of_pay_days']
+                    existing.leave_balance_used = leave_info['leave_balance_used']
+                    
                     existing.basic_salary = salary_components['basic']
                     existing.hra = salary_components['hra']
+                    existing.special_allowance = salary_components['special_allowance']
                     existing.conveyance_allowance = salary_components['conveyance_allowance']
                     existing.medical_allowance = salary_components['medical_allowance']
-                    existing.special_allowance = salary_components['special_allowance']
                     existing.overtime_amount = salary_components['overtime_amount']
                     existing.expenses = salary_components['expenses']
                     existing.bonus = salary_components['bonus']
                     existing.leave_balance_amount = salary_components['leave_balance_amount']
-                    existing.pf_employer = salary_components['employer_pf']
-                    existing.pf_employee = salary_components['employee_pf']
-                    existing.gross_salary = salary_components['gross_salary']
+                    
+                    existing.pf_employee = salary_components['pf_employee']
+                    existing.pf_employer = salary_components['pf_employer']
+                    existing.vpf = salary_components['vpf']
+                    existing.pt = salary_components['pt']
+                    existing.charity = salary_components['charity']
+                    existing.misc_deduction = salary_components['misc_deduction']
+                    existing.additional_deduction = salary_components['additional_deduction']
                     existing.total_deductions = salary_components['total_deductions']
+                    existing.gross_salary = salary_components['gross_salary']
                     existing.net_salary = salary_components['net_salary']
-                    existing.processed_by = current_user.username  # Track who processed this payroll
+                    existing.hike_amount = 0
+                    existing.processed_by = current_user.username
                     existing.processed_at = datetime.utcnow()
                 else:
-                    # Insert new payroll with new schema
+                    # Insert new payroll
                     new_payroll = Payroll()
                     new_payroll.emp_id = emp_id
                     new_payroll.month = month
                     new_payroll.year = year
-                    new_payroll.total_days = days_worked
-                    new_payroll.present_days = days_worked
-                    new_payroll.leaves_taken = 0
-                    new_payroll.paid_days = days_worked
-                    new_payroll.loss_of_pay_days = 30 - days_worked if days_worked < 30 else 0
-                    new_payroll.leave_balance_used = 0
+                    new_payroll.total_days = 30
+                    new_payroll.present_days = int(leave_info['present_days'])
+                    new_payroll.leaves_taken = leaves_taken
+                    new_payroll.paid_days = int(leave_info['paid_days'])
+                    new_payroll.loss_of_pay_days = leave_info['loss_of_pay_days']
+                    new_payroll.leave_balance_used = leave_info['leave_balance_used']
+                    
                     new_payroll.basic_salary = salary_components['basic']
                     new_payroll.hra = salary_components['hra']
+                    new_payroll.special_allowance = salary_components['special_allowance']
                     new_payroll.conveyance_allowance = salary_components['conveyance_allowance']
                     new_payroll.medical_allowance = salary_components['medical_allowance']
-                    new_payroll.special_allowance = salary_components['special_allowance']
                     new_payroll.overtime_amount = salary_components['overtime_amount']
                     new_payroll.expenses = salary_components['expenses']
                     new_payroll.bonus = salary_components['bonus']
                     new_payroll.leave_balance_amount = salary_components['leave_balance_amount']
-                    new_payroll.pf_employer = salary_components['employer_pf']
-                    new_payroll.pf_employee = salary_components['employee_pf']
-                    new_payroll.gross_salary = salary_components['gross_salary']
+                    
+                    new_payroll.pf_employee = salary_components['pf_employee']
+                    new_payroll.pf_employer = salary_components['pf_employer']
+                    new_payroll.vpf = salary_components['vpf']
+                    new_payroll.pt = salary_components['pt']
+                    new_payroll.charity = salary_components['charity']
+                    new_payroll.misc_deduction = salary_components['misc_deduction']
+                    new_payroll.additional_deduction = salary_components['additional_deduction']
                     new_payroll.total_deductions = salary_components['total_deductions']
+                    new_payroll.gross_salary = salary_components['gross_salary']
                     new_payroll.net_salary = salary_components['net_salary']
                     new_payroll.hike_amount = 0
-                    new_payroll.processed_by = current_user.username  # Track who processed this payroll
+                    new_payroll.processed_by = current_user.username
                     new_payroll.processed_at = datetime.utcnow()
                     db.session.add(new_payroll)
 
                 success_count += 1
             except Exception as e:
-                logging.error(
-                    f"Error processing payroll for {row.get('emp_id', 'Unknown')}: {str(e)}"
-                )
+                error_details.append(f"Row {row_num + 2}: Unexpected error - {str(e)}")
                 error_count += 1
                 continue
 
-        db.session.commit()
+        if success_count > 0:
+            db.session.commit()
 
-        flash(
-            f'Successfully processed {success_count} payrolls. {error_count} errors.',
-            'success')
+        # Provide detailed feedback
+        if success_count > 0 and error_count == 0:
+            flash(f'Successfully processed all {success_count} payrolls from the Excel file!', 'success')
+        elif success_count > 0 and error_count > 0:
+            flash(f'Successfully processed {success_count} payrolls. {error_count} rows had errors.', 'warning')
+            if error_details:
+                flash(f'Error details: {"; ".join(error_details[:5])}{"..." if len(error_details) > 5 else ""}', 'info')
+        else:
+            flash(f'No payrolls were processed. All {error_count} rows had errors.', 'error')
+            if error_details:
+                flash(f'Error details: {"; ".join(error_details[:5])}{"..." if len(error_details) > 5 else ""}', 'error')
+                
     except Exception as e:
         db.session.rollback()
-        flash(f'Error processing file: {str(e)}', 'error')
+        logging.error(f"Error processing Excel file: {str(e)}")
+        if "No sheet named" in str(e):
+            flash('Excel file format error. Please ensure the file has the correct structure.', 'error')
+        elif "Missing column" in str(e):
+            flash('Excel file is missing required columns. Please download the template and use the correct format.', 'error')
+        else:
+            flash('Failed to process Excel file. Please check the file format and try again.', 'error')
 
     return redirect(url_for('dashboard'))
 
